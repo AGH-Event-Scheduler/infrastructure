@@ -2,7 +2,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "=3.0.0"
+      version = "=3.70.0"
     }
   }
 }
@@ -20,10 +20,13 @@ provider "azurerm" {
 locals {
   environment = "prod"
 
-  backend-app-name = "${local.environment}-agh-event-hub-api"
-  rg-name          = "${local.environment}-rg"
-  sp-name          = "${local.environment}-sp"
-  acr-name         = "${local.environment}agheventhubacr"
+  backend-app-name           = "${local.environment}-agh-event-hub-api"
+  backend-app-db-server-name = "${local.environment}-agh-event-hub-server-db"
+  backend-app-db-name        = "${local.environment}-agh-event-hub-db"
+  rg-name                    = "${local.environment}-rg"
+  sp-name                    = "${local.environment}-sp"
+  acr-name                   = "${local.environment}agheventhubacr"
+  key-vault-name             = "${local.environment}agheventhubkeyvault"
 
   docker_image_tag = data.external.deployed-app-docker-tag.result["docker_image_tag"] != "" ? data.external.deployed-app-docker-tag.result["docker_image_tag"] : "latest"
 }
@@ -57,6 +60,61 @@ resource "azurerm_service_plan" "sp" {
   }
 }
 
+# ===============================================================================
+# REGISTER SECRET KEY VAULT
+# ===============================================================================
+
+resource "random_password" "db-password" {
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "key-vault" {
+  name                       = local.key-vault-name
+  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = azurerm_resource_group.rg.name
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "premium"
+  soft_delete_retention_days = 7
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    key_permissions = [
+      "Create",
+      "Get",
+      "List"
+    ]
+
+    secret_permissions = [
+      "Set",
+      "Get",
+      "Delete",
+      "Purge",
+      "Recover",
+      "List"
+    ]
+
+    storage_permissions = [
+      "Get",
+      "List"
+    ]
+  }
+
+  tags = {
+    env = "${local.environment}"
+  }
+}
+
+resource "azurerm_key_vault_secret" "db-admin-password" {
+  name         = "${local.backend-app-db-server-name}-admin-password"
+  value        = random_password.db-password.result
+  key_vault_id = azurerm_key_vault.key-vault.id
+}
 
 # ===============================================================================
 # REGISTER CONTAINER REGISTRY
@@ -89,8 +147,8 @@ resource "azurerm_linux_web_app" "backend-app" {
     always_on = false
 
     application_stack {
-      docker_image     = "docker.io/enriquecatala/fastapi-helloworld"
-      docker_image_tag = local.docker_image_tag
+      docker_registry_url = "https://docker.io"
+      docker_image_name   = "enriquecatala/fastapi-helloworld:${local.docker_image_tag}"
     }
   }
 
@@ -105,71 +163,38 @@ resource "azurerm_linux_web_app" "backend-app" {
   }
 }
 
-
 # ===============================================================================
-# REGISTER TODO
+# REGISTER BACKEND API DATABASE
 # ===============================================================================
 
+resource "azurerm_postgresql_server" "server-db" {
+  name                = local.backend-app-db-server-name
+  location            = "North Europe"
+  resource_group_name = azurerm_resource_group.rg.name
 
-# resource "azurerm_postgresql_server" "example" {
-#   name                = "postgresql-server-1"
-#   location            = azurerm_resource_group.example.location
-#   resource_group_name = azurerm_resource_group.example.name
+  sku_name = "B_Gen5_2"
 
-#   sku_name = "B_Gen5_2"
+  storage_mb                   = 5120
+  backup_retention_days        = 7
+  geo_redundant_backup_enabled = false
+  auto_grow_enabled            = true
 
-#   storage_mb                   = 5120
-#   backup_retention_days        = 7
-#   geo_redundant_backup_enabled = false
-#   auto_grow_enabled            = true
+  administrator_login          = "agheventhubdbadmin"
+  administrator_login_password = azurerm_key_vault_secret.db-admin-password.value
 
-#   administrator_login          = "psqladmin"
-#   administrator_login_password = "H@Sh1CoR3!"
-#   version                      = "9.5"
-#   ssl_enforcement_enabled      = true
-# }
+  version = "11"
 
-# resource "azurerm_postgresql_database" "example" {
-#   name                = "exampledb"
-#   resource_group_name = azurerm_resource_group.example.name
-#   server_name         = azurerm_postgresql_server.example.name
-#   charset             = "UTF8"
-#   collation           = "English_United States.1252"
-# }
+  ssl_enforcement_enabled = true
 
+  tags = {
+    env = "${local.environment}"
+  }
+}
 
-# data "azurerm_client_config" "current" {}
-
-# resource "azurerm_resource_group" "example" {
-#   name     = "example-resources"
-#   location = "West Europe"
-# }
-
-# resource "azurerm_key_vault" "example" {
-#   name                        = "examplekeyvault"
-#   location                    = azurerm_resource_group.example.location
-#   resource_group_name         = azurerm_resource_group.example.name
-#   enabled_for_disk_encryption = true
-#   tenant_id                   = data.azurerm_client_config.current.tenant_id
-#   soft_delete_retention_days  = 7
-#   purge_protection_enabled    = false
-
-#   sku_name = "standard"
-
-#   access_policy {
-#     tenant_id = data.azurerm_client_config.current.tenant_id
-#     object_id = data.azurerm_client_config.current.object_id
-
-#     key_permissions = [
-#       "Get",
-#     ]
-
-#     secret_permissions = [
-#       "Get",
-#     ]
-
-#     storage_permissions = [
-#       "Get",
-#     ]
-#   }
-# }
+resource "azurerm_postgresql_database" "db" {
+  name                = local.backend-app-db-name
+  resource_group_name = azurerm_resource_group.rg.name
+  server_name         = azurerm_postgresql_server.server-db.name
+  charset             = "UTF8"
+  collation           = "English_United States.1252"
+}
