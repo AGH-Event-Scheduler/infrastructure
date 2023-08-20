@@ -8,10 +8,10 @@ fi
 rg=$1
 name=$2
 
-result=$(az webapp show --resource-group $rg --name $name 2>&1)
+result=$(az resource show -g $rg -n $name --resource-type Microsoft.Web/sites 2>&1)
 
 if [[ $? -eq 0 ]]; then
-    docker_image_tag=$(echo $result | jq '.siteConfig.linuxFxVersion' | cut -d ":" -f 2 | tr -d "\"")
+    docker_image_tag=$(echo $result | jq '.properties.siteConfig.linuxFxVersion' | tr -d "\"" | cut -d ":" -f 2)
     echo "{\"docker_image_tag\":\"$docker_image_tag\"}"
     exit 0
 fi
