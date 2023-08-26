@@ -5,6 +5,12 @@ terraform {
       version = "=3.70.0"
     }
   }
+  backend "azurerm" {
+    resource_group_name  = "tfstate"
+    storage_account_name = "agheventhubtfstate"
+    container_name       = "tfstate"
+    key                  = "terraform.tfstate"
+  }
 }
 
 provider "azurerm" {
@@ -64,6 +70,7 @@ resource "azurerm_service_plan" "sp" {
 # REGISTER SECRET KEY VAULT
 # ===============================================================================
 
+# It would be better to not generate password here, since now terraform.state file stores it
 resource "random_password" "db-password" {
   length           = 32
   special          = true
